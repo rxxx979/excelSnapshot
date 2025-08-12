@@ -14,8 +14,8 @@ import (
 
 // 性能测试配置
 const (
-	TestExcelFile = "/Users/rxx/Downloads/腾讯微证券周报数据源.xlsx"
-	TestOutputDir = "./test_output/"
+	TestExcelFile = "demo.xlsx"
+	TestOutputDir = "."
 )
 
 // 启动性能监控服务器
