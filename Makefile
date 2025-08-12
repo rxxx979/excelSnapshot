@@ -10,52 +10,45 @@ LDFLAGS := -s -w
 	windows-amd64 windows-arm64
 
 # 本机构建（当前平台）
-build:
-	@mkdir -p dist
+build: clean
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o dist/$(BINARY)
 	@echo "Built dist/$(BINARY)"
 
 # macOS
 darwin-amd64:
-	@mkdir -p dist/darwin-amd64
 	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 \
-		go build -ldflags "$(LDFLAGS)" -o dist/darwin-amd64/$(BINARY)
-	@echo "Built dist/darwin-amd64/$(BINARY)"
+		go build -ldflags "$(LDFLAGS)" -o dist/$(BINARY)_darwin_amd64
+	@echo "Built dist/$(BINARY)_darwin_amd64"
 
 darwin-arm64:
-	@mkdir -p dist/darwin-arm64
 	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 \
-		go build -ldflags "$(LDFLAGS)" -o dist/darwin-arm64/$(BINARY)
-	@echo "Built dist/darwin-arm64/$(BINARY)"
+		go build -ldflags "$(LDFLAGS)" -o dist/$(BINARY)_darwin_arm64
+	@echo "Built dist/$(BINARY)_darwin_arm64"
 
 # Linux
 linux-amd64:
-	@mkdir -p dist/linux-amd64
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
-		go build -ldflags "$(LDFLAGS)" -o dist/linux-amd64/$(BINARY)
-	@echo "Built dist/linux-amd64/$(BINARY)"
+		go build -ldflags "$(LDFLAGS)" -o dist/$(BINARY)_linux_amd64
+	@echo "Built dist/$(BINARY)_linux_amd64"
 
 linux-arm64:
-	@mkdir -p dist/linux-arm64
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
-		go build -ldflags "$(LDFLAGS)" -o dist/linux-arm64/$(BINARY)
-	@echo "Built dist/linux-arm64/$(BINARY)"
+		go build -ldflags "$(LDFLAGS)" -o dist/$(BINARY)_linux_arm64
+	@echo "Built dist/$(BINARY)_linux_arm64"
 
 # Windows
 windows-amd64:
-	@mkdir -p dist/windows-amd64
 	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
-		go build -ldflags "$(LDFLAGS)" -o dist/windows-amd64/$(BINARY).exe
-	@echo "Built dist/windows-amd64/$(BINARY).exe"
+		go build -ldflags "$(LDFLAGS)" -o dist/$(BINARY)_windows_amd64.exe
+	@echo "Built dist/$(BINARY)_windows_amd64.exe"
 
 windows-arm64:
-	@mkdir -p dist/windows-arm64
 	GOOS=windows GOARCH=arm64 CGO_ENABLED=0 \
-		go build -ldflags "$(LDFLAGS)" -o dist/windows-arm64/$(BINARY).exe
-	@echo "Built dist/windows-arm64/$(BINARY).exe"
+		go build -ldflags "$(LDFLAGS)" -o dist/$(BINARY)_windows_arm64.exe
+	@echo "Built dist/$(BINARY)_windows_arm64.exe"
 
 # 一键全部
-build-all: darwin-amd64 darwin-arm64 linux-amd64 linux-arm64 windows-amd64 windows-arm64
+build-all: clean darwin-amd64 darwin-arm64 linux-amd64 linux-arm64 windows-amd64 windows-arm64
 	@echo "All targets built into dist/"
 
 # 清理
