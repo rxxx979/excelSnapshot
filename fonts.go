@@ -127,7 +127,7 @@ func setFontFaceWithName(dc *gg.Context, fontName string, size float64) error {
 		return fmt.Errorf("字体系统未初始化")
 	}
 
-	var font *opentype.Font = defaultFont
+	font := defaultFont
 
 	// 如果指定了字体名称，尝试从缓存中获取
 	if fontName != "" {

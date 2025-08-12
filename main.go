@@ -20,6 +20,7 @@ func main() {
 		outPath    = flag.String("out", "", "输出文件路径（.png）")
 		allSheets  = flag.Bool("all-sheets", false, "导出所有有内容的工作表（输出为多个文件）")
 		forceRaw   = flag.Bool("force-raw", false, "强制使用原始未格式化数值渲染")
+		genDemo    = flag.String("gen-demo", "", "生成示例 Excel 文件到该路径（如 demo.xlsx），生成后退出")
 	)
 
 	flag.Usage = func() {
@@ -31,6 +32,15 @@ func main() {
 	flag.Parse()
 
 	forceRawValues := *forceRaw
+
+	// 仅生成示例表并退出
+	if strings.TrimSpace(*genDemo) != "" {
+		if err := generateDemoExcel(*genDemo); err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("已生成示例: %s", *genDemo)
+		return
+	}
 
 	if strings.TrimSpace(*inPath) == "" {
 		flag.Usage()

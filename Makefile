@@ -51,6 +51,11 @@ windows-arm64:
 build-all: clean darwin-amd64 darwin-arm64 linux-amd64 linux-arm64 windows-amd64 windows-arm64
 	@echo "All targets built into dist/"
 
+# 生成示例 Excel
+demo:
+	go run . -gen-demo demo.xlsx
+	@echo "Generated demo.xlsx"
+
 # 清理
 clean:
 	rm -rf dist

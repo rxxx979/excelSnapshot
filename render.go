@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 
@@ -14,7 +15,11 @@ func renderPNGFromExcel(xlsxPath, sheet string, sheetIdx int, outPath string, fo
 	if err != nil {
 		return fmt.Errorf("无法打开 Excel 文件: %w", err)
 	}
-	defer f.Close()
+	defer func() {
+		if err := f.Close(); err != nil {
+			log.Printf("关闭 Excel 文件失败: %v", err)
+		}
+	}()
 
 	var sheetName string
 	if sheet != "" {
@@ -253,7 +258,9 @@ func renderCellTextWithStyle(dc *gg.Context, text string, style CellStyle, x, y,
 
 	if err := setFontFaceWithName(dc, style.FontName, fontSize); err != nil {
 		// 如果指定字体失败，使用默认字体
-		setFontFace(dc, fontSize)
+		if err := setFontFace(dc, fontSize); err != nil {
+			log.Printf("设置字体失败: %v", err)
+		}
 	}
 
 	// 设置文本颜色 - 严格使用Excel样式

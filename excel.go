@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"image/color"
+	"log"
 	"strconv"
 	"strings"
 
@@ -40,7 +41,11 @@ func listNonEmptySheets(xlsxPath string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("无法打开 Excel 文件: %w", err)
 	}
-	defer f.Close()
+	defer func() {
+		if err := f.Close(); err != nil {
+			log.Printf("关闭 Excel 文件失败: %v", err)
+		}
+	}()
 
 	var nonEmptySheets []string
 	for _, sheet := range f.GetSheetList() {
