@@ -3,15 +3,19 @@ package excelsnapshot
 import (
 	"strconv"
 	"strings"
+
+	"github.com/xuri/excelize/v2"
 )
 
 // Cell 表示单元格信息（最常用的信息用于后续 gg 渲染）
 type Cell struct {
-	Sheet   *Sheet
-	Row     int    // 1-based
-	Col     int    // 1-based
-	Address string // 如 "A1"
-	Value   string // 解析后的显示值（已由 excelize 处理）
+	Sheet       *Sheet
+	Row         int    // 1-based
+	Col         int    // 1-based
+	Address     string // 如 "A1"
+	Value       string // 解析后的显示值（已由 excelize 处理）
+	IsMerged    bool
+	MergedRange []string
 }
 
 // IsEmpty 判断单元格是否为空
@@ -39,4 +43,12 @@ func (c *Cell) Int() (int, error) {
 		return 0, strconv.ErrSyntax
 	}
 	return strconv.Atoi(strings.TrimSpace(c.Value))
+}
+
+func (c *Cell) Style() (*excelize.Style, error) {
+	styleIndex, err := c.Sheet.excel.file.GetCellStyle(c.Sheet.Name, c.Address)
+	if err != nil {
+		return nil, err
+	}
+	return c.Sheet.excel.file.GetStyle(styleIndex)
 }

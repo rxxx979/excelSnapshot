@@ -1,121 +1,131 @@
 package excelsnapshot
 
 import (
-	"fmt"
-	"image"
-
 	"github.com/xuri/excelize/v2"
+	"go.uber.org/zap"
 )
 
 type Sheet struct {
-	excel *Excel
-	Name  string
-	Index int
-	Rows  int
-	Cols  int
-	cells map[string]*Cell // 仅存储非空单元格
+	excel      *Excel
+	Name       string
+	Index      int
+	Rows       int
+	Cols       int
+	MaxColName string
+
+	// 不同行的行高
+	rowHeightMap map[int]float64
+	// 不同列的列宽
+	colWidthMap map[string]float64
+	// 单元格
+	cells map[string]*Cell
 }
 
 // NewSheet 构造函数，仅建立与 Excel 的关联与名称，实际数据通过 Load 加载
 func NewSheet(e *Excel, name string) *Sheet {
-	return &Sheet{
-		excel: e,
-		Name:  name,
-		cells: make(map[string]*Cell),
+	sheet := &Sheet{
+		excel:        e,
+		Name:         name,
+		rowHeightMap: make(map[int]float64),
+		colWidthMap:  make(map[string]float64),
+		cells:        make(map[string]*Cell),
 	}
+	return sheet
 }
 
-// Load 读取工作表的行列及非空单元格数据
+// Load 加载工作表数据
 func (s *Sheet) Load() error {
-	if s.excel == nil || s.excel.file == nil {
-		return fmt.Errorf("Excel 文件未打开")
-	}
+	// 获取所有行数据
 	rows, err := s.excel.file.GetRows(s.Name)
 	if err != nil {
 		return err
 	}
-	s.Rows = len(rows)
-	maxCols := 0
-	// 清空并重建 cells
-	s.cells = make(map[string]*Cell)
-	for rIdx, row := range rows {
-		if len(row) > maxCols {
-			maxCols = len(row)
+	maxRow, maxCol := 0, 0
+
+	// 遍历行，收集行高、单元格内容
+	for rowIndex, row := range rows {
+		height, _ := s.excel.file.GetRowHeight(s.Name, rowIndex+1)
+		s.rowHeightMap[rowIndex+1] = height
+		s.excel.logger.Debug("行：", zap.Int("row", rowIndex+1), zap.Float64("height", height))
+
+		if rowIndex+1 > maxRow {
+			maxRow = rowIndex + 1
 		}
-		for cIdx, val := range row {
-			if val == "" {
-				continue
-			}
-			addr, err := excelize.CoordinatesToCellName(cIdx+1, rIdx+1)
-			if err != nil {
-				return err
-			}
-			s.cells[addr] = &Cell{
+		if len(row) > maxCol {
+			maxCol = len(row)
+		}
+
+		for colIndex, value := range row {
+			cellAddr, _ := excelize.CoordinatesToCellName(colIndex+1, rowIndex+1)
+			s.cells[cellAddr] = &Cell{
 				Sheet:   s,
-				Row:     rIdx + 1,
-				Col:     cIdx + 1,
-				Address: addr,
-				Value:   val,
+				Row:     rowIndex + 1,
+				Col:     colIndex + 1,
+				Address: cellAddr,
+				Value:   value,
 			}
 		}
 	}
-	s.Cols = maxCols
+
+	// 列宽
+	for col := 1; col <= maxCol; col++ {
+		colLetter, _ := excelize.ColumnNumberToName(col)
+		width, _ := s.excel.file.GetColWidth(s.Name, colLetter)
+		s.colWidthMap[colLetter] = width
+		s.excel.logger.Debug("列：", zap.String("col", colLetter), zap.Float64("width", width))
+	}
+
+	// 合并单元格处理
+	mergedCells, err := s.excel.file.GetMergeCells(s.Name)
+	if err != nil {
+		return err
+	}
+	for _, mergedCell := range mergedCells {
+		startCol, startRow, _ := excelize.CellNameToCoordinates(mergedCell.GetStartAxis())
+		endCol, endRow, _ := excelize.CellNameToCoordinates(mergedCell.GetEndAxis())
+		s.excel.logger.Debug("合并单元格：", zap.String("start", mergedCell.GetStartAxis()), zap.String("end", mergedCell.GetEndAxis()))
+		// 构造整个合并区域的地址列表
+		var mergedRange []string
+		for r := startRow; r <= endRow; r++ {
+			for c := startCol; c <= endCol; c++ {
+				addr, _ := excelize.CoordinatesToCellName(c, r)
+				mergedRange = append(mergedRange, addr)
+			}
+		}
+
+		// 给区域内的所有 Cell 打标记
+		for _, addr := range mergedRange {
+			cell, ok := s.cells[addr]
+			if !ok {
+				// 如果之前没加载到值，也新建一个 Cell
+				col, row, _ := excelize.CellNameToCoordinates(addr)
+				cell = &Cell{
+					Sheet:   s,
+					Row:     row,
+					Col:     col,
+					Address: addr,
+					Value:   "",
+				}
+				s.cells[addr] = cell
+			}
+			cell.IsMerged = true
+			cell.MergedRange = mergedRange
+		}
+	}
+
+	// 更新 sheet 信息
+	s.Rows = maxRow
+	s.Cols = maxCol
+	s.MaxColName, _ = excelize.ColumnNumberToName(maxCol)
 	return nil
 }
 
-// Cell 按地址获取单元格（如未缓存或为空则从文件中按需读取）
-func (s *Sheet) Cell(address string) (*Cell, error) {
-	if c, ok := s.cells[address]; ok {
-		return c, nil
-	}
-	if s.excel == nil || s.excel.file == nil {
-		return nil, fmt.Errorf("Excel 文件未打开")
-	}
-	val, err := s.excel.file.GetCellValue(s.Name, address)
-	if err != nil {
-		return nil, err
-	}
-	col, row, err := excelize.CellNameToCoordinates(address)
-	if err != nil {
-		return &Cell{Sheet: s, Address: address, Value: val}, nil
-	}
-	c := &Cell{Sheet: s, Row: row, Col: col, Address: address, Value: val}
-	if val != "" {
-		s.cells[address] = c
-	}
-	if row > s.Rows {
-		s.Rows = row
-	}
-	if col > s.Cols {
-		s.Cols = col
-	}
-	return c, nil
+// GetColWidth 获取指定列的列宽
+func (s *Sheet) GetColWidth(col string) float64 {
+	return s.colWidthMap[col]
 }
 
-// CellRC 通过行列索引（1-based）获取单元格
-func (s *Sheet) CellRC(row, col int) (*Cell, error) {
-	addr, err := excelize.CoordinatesToCellName(col, row)
-	if err != nil {
-		return nil, err
-	}
-	return s.Cell(addr)
-}
-
-// Cells 返回当前已加载的非空单元格集合（注意：为避免外部修改，这里返回一个浅拷贝）
-func (s *Sheet) Cells() map[string]*Cell {
-	out := make(map[string]*Cell, len(s.cells))
-	for k, v := range s.cells {
-		out[k] = v
-	}
-	return out
-}
-
-// Size 返回工作表的最大行列（1-based，基于已加载数据推断）
-func (s *Sheet) Size() (rows, cols int) {
-	return s.Rows, s.Cols
-}
-
-// Render 渲染当前工作表为 image.Image
-func (s *Sheet) Render() (image.Image, error) {
-	return RenderSheet(s)
+// GetRowHeight 获取指定行的行高
+func (s *Sheet) GetRowHeight(row int) float64 {
+	return s.rowHeightMap[row]
 }

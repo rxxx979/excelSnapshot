@@ -2,28 +2,34 @@ package excelsnapshot
 
 import (
 	"fmt"
-	"image"
+	"image/png"
+	"os"
 
 	"github.com/xuri/excelize/v2"
+	"go.uber.org/zap"
 )
 
 // Excel 结构体
 type Excel struct {
-	path   string
-	file   *excelize.File
-	sheets map[string]*Sheet
+	path          string
+	file          *excelize.File
+	sheets        map[string]*Sheet
+	logger        *zap.Logger
+	sheetRenderer *SheetRenderer
 }
 
 // NewExcel 创建 Excel struct
-func NewExcel(path string) (*Excel, error) {
+func NewExcel(path string, logger *zap.Logger) (*Excel, error) {
 	f, err := excelize.OpenFile(path)
 	if err != nil {
 		return nil, err
 	}
 	return &Excel{
-		path:   path,
-		file:   f,
-		sheets: make(map[string]*Sheet),
+		path:          path,
+		file:          f,
+		sheets:        make(map[string]*Sheet),
+		logger:        logger,
+		sheetRenderer: NewSheetRenderer(logger),
 	}, nil
 }
 
@@ -45,6 +51,7 @@ func (e *Excel) LoadSheets() error {
 		if _, ok := e.sheets[name]; ok {
 			continue
 		}
+		e.logger.Info("加载工作表", zap.String("name", name))
 		sh := NewSheet(e, name)
 		sh.Index = idx
 		if err := sh.Load(); err != nil {
@@ -84,63 +91,30 @@ func (e *Excel) Close() error {
 	return e.file.Close()
 }
 
-// Render 渲染指定工作表或全部工作表。
-// 约定：
-// - 若 all=true，则忽略 sheetName 与 sheetIndex，渲染所有工作表；
-// - 否则优先使用 sheetName，其次使用 0-based 的 sheetIndex；
-// 返回：map[工作表名称]image.Image
-func (e *Excel) Render(sheetName string, sheetIndex int, all bool) (map[string]image.Image, error) {
-	if e.file == nil {
-		return nil, fmt.Errorf("Excel 文件未打开")
-	}
-	out := make(map[string]image.Image)
+// Parse 解析 Excel（加载所有工作表到内存）
+func (e *Excel) Parse() error {
+	return e.LoadSheets()
+}
 
-	if all {
-		names, err := e.GetSheetList()
-		if err != nil {
-			return nil, err
-		}
-		for i, name := range names {
-			sh, err := e.GetSheet(name)
-			if err != nil {
-				return nil, err
-			}
-			if sh.Index == 0 { // 尝试补充索引信息
-				sh.Index = i
-			}
-			img, err := sh.Render()
-			if err != nil {
-				return nil, fmt.Errorf("渲染工作表 %s 失败: %w", name, err)
-			}
-			out[name] = img
-		}
-		return out, nil
-	}
+func (e *Excel) RenderSheet(name string) error {
+	return e.RenderSheetWithScale(name, 2.0)
+}
 
-	// 单个 sheet
-	targetName := sheetName
-	if targetName == "" {
-		if sheetIndex < 0 {
-			return nil, fmt.Errorf("请提供 sheet_name 或 sheet_index，或设置 all=true")
-		}
-		names, err := e.GetSheetList()
-		if err != nil {
-			return nil, err
-		}
-		if sheetIndex >= len(names) {
-			return nil, fmt.Errorf("sheet_index 超出范围: %d >= %d", sheetIndex, len(names))
-		}
-		targetName = names[sheetIndex]
-	}
-
-	sh, err := e.GetSheet(targetName)
+func (e *Excel) RenderSheetWithScale(name string, scale float64) error {
+	sh, err := e.GetSheet(name)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	img, err := sh.Render()
+
+	img, err := e.sheetRenderer.RenderSheet(sh)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	out[targetName] = img
-	return out, nil
+	f, err := os.Create("out.png")
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	png.Encode(f, img)
+	return nil
 }

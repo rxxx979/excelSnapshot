@@ -2,14 +2,11 @@ package main
 
 import (
 	"flag"
-	"fmt"
-	"image"
-	"image/png"
-	"os"
-	"path/filepath"
-	"strings"
+	"runtime/debug"
 
 	excelsnapshot "github.com/rxxx/excelSnapshot"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func main() {
@@ -19,6 +16,7 @@ func main() {
 		sheet   string
 		index   int
 		all     bool
+		verbose bool
 	)
 
 	flag.StringVar(&inPath, "i", "", "输入的 Excel 文件路径 (.xlsx)")
@@ -26,97 +24,58 @@ func main() {
 	flag.StringVar(&sheet, "sheet", "", "要渲染的工作表名称（优先于 index）")
 	flag.IntVar(&index, "index", -1, "要渲染的工作表索引（0-based）")
 	flag.BoolVar(&all, "all", false, "是否渲染所有工作表")
+	flag.BoolVar(&verbose, "v", false, "启用调试日志（开发模式）")
 	flag.Parse()
 
-	if inPath == "" {
-		fatalf("必须提供 -i 输入文件路径")
-	}
-	if _, err := os.Stat(inPath); err != nil {
-		fatalf("输入文件不存在: %v", err)
+	// 判断是否开发环境
+	var isDev bool
+	_, isBuildInfo := debug.ReadBuildInfo()
+	if isBuildInfo {
+		isDev = true
+	} else {
+		isDev = false
 	}
 
-	e, err := excelsnapshot.NewExcel(inPath)
+	// 判断是否启用调试日志
+	var level zapcore.Level
+	if verbose {
+		level = zap.DebugLevel
+	} else {
+		level = zap.InfoLevel
+	}
+
+	excelSnapshotLogger, excelSnapshotSync, err := excelsnapshot.SetupLogger("excel_snapshot", level, isDev)
 	if err != nil {
-		fatalf("打开 Excel 失败: %v", err)
+		panic(err)
 	}
-	defer e.Close()
-
-	// 简化：使用内嵌字体与默认渲染参数
-	imgs, err := e.Render(sheet, index, all)
+	excelSnapshotLogger.Info("加载 Excel 文件", zap.String("path", inPath))
+	excel, err := excelsnapshot.NewExcel(inPath, excelSnapshotLogger)
 	if err != nil {
-		fatalf("渲染失败: %v", err)
+		panic(err)
 	}
 
-	// 输出
-	if len(imgs) == 1 && !all {
-		// 单文件输出：允许 -o 指定具体文件
-		for name, img := range imgs {
-			outFile := outPath
-			if !strings.HasSuffix(strings.ToLower(outFile), ".png") {
-				// 作为目录处理
-				if err := mkdirAll(outFile); err != nil {
-					fatalf("创建输出目录失败: %v", err)
-				}
-				outFile = filepath.Join(outFile, sanitize(name)+".png")
-			}
-			if err := savePNG(outFile, img); err != nil {
-				fatalf("保存 PNG 失败 (%s): %v", outFile, err)
-			}
-			fmt.Printf("保存: %s\n", outFile)
+	if err := excel.Parse(); err != nil {
+		panic(err)
+	}
+
+	// 显示工作表列表
+	sheetList, err := excel.GetSheetList()
+	if err != nil {
+		panic(err)
+	}
+	excelSnapshotLogger.Info("可用的工作表", zap.Strings("sheets", sheetList))
+
+	if sheet != "" {
+		if err := excel.RenderSheet(sheet); err != nil {
+			panic(err)
 		}
-		return
-	}
-
-	// 多 sheet 输出：-o 必须是目录
-	if outPath == "" {
-		outPath = "."
-	}
-	if err := mkdirAll(outPath); err != nil {
-		fatalf("创建输出目录失败: %v", err)
-	}
-	for name, img := range imgs {
-		file := filepath.Join(outPath, sanitize(name)+".png")
-		if err := savePNG(file, img); err != nil {
-			fatalf("保存 PNG 失败 (%s): %v", file, err)
+	} else if len(sheetList) > 0 {
+		// 如果没有指定工作表，渲染第一个
+		if err := excel.RenderSheet(sheetList[0]); err != nil {
+			panic(err)
 		}
-		fmt.Printf("保存: %s\n", file)
 	}
-}
 
-func savePNG(path string, img image.Image) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	return png.Encode(f, img)
-}
+	defer excelSnapshotSync()
 
-func mkdirAll(dir string) error {
-	if dir == "" || dir == "." {
-		return nil
-	}
-	return os.MkdirAll(dir, 0o755)
-}
-
-func sanitize(name string) string {
-	name = strings.TrimSpace(name)
-	name = strings.ReplaceAll(name, "/", "-")
-	name = strings.ReplaceAll(name, "\\", "-")
-	name = strings.ReplaceAll(name, ":", "-")
-	name = strings.ReplaceAll(name, "*", "-")
-	name = strings.ReplaceAll(name, "?", "-")
-	name = strings.ReplaceAll(name, "\"", "-")
-	name = strings.ReplaceAll(name, "<", "-")
-	name = strings.ReplaceAll(name, ">", "-")
-	name = strings.ReplaceAll(name, "|", "-")
-	if name == "" {
-		name = "sheet"
-	}
-	return name
-}
-
-func fatalf(format string, a ...any) {
-	fmt.Fprintf(os.Stderr, format+"\n", a...)
-	os.Exit(1)
 }
