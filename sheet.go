@@ -85,6 +85,33 @@ func (s *Sheet) Load() error {
 			}
 		}
 	}
+
+	// 使用更大的搜索范围来确保捕获所有可能的单元格
+	searchRows := max(maxRow, 10)
+	searchCols := max(maxCol, 10)
+
+	for rowNum := 1; rowNum <= searchRows; rowNum++ {
+		for colNum := 1; colNum <= searchCols; colNum++ {
+			cellAddr, _ := excelize.CoordinatesToCellName(colNum, rowNum)
+			if _, exists := s.cells[cellAddr]; !exists {
+				// 检查该单元格是否被显式设置过（包括空值）
+				cellValue, err := s.excel.file.GetCellValue(s.Name, cellAddr)
+				if err == nil {
+					// 通过获取单元格类型来判断是否存在
+					cellType, err := s.excel.file.GetCellType(s.Name, cellAddr)
+					if err == nil && cellType != excelize.CellTypeUnset {
+						s.cells[cellAddr] = &Cell{
+							Sheet:   s,
+							Row:     rowNum,
+							Col:     colNum,
+							Address: cellAddr,
+							Value:   cellValue,
+						}
+					}
+				}
+			}
+		}
+	}
 	s.excel.logger.Info("加载工作表", zap.String("sheet", s.Name), zap.Int("rows", maxRow), zap.Int("cols", maxCol))
 
 	// 优化：批量处理行高（利用Excel行内高度统一特性）
