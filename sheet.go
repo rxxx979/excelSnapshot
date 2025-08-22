@@ -40,6 +40,8 @@ type Sheet struct {
 	colWidthMap map[string]float64
 	// 单元格
 	cells map[string]*Cell
+	// 样式
+	styles map[int]*excelize.Style
 	// 工作表中的图片
 	images []*ExcelImage
 }
@@ -52,6 +54,7 @@ func NewSheet(e *Excel, name string) *Sheet {
 		rowHeightMap: make(map[int]float64),
 		colWidthMap:  make(map[string]float64),
 		cells:        make(map[string]*Cell),
+		styles:       make(map[int]*excelize.Style),
 	}
 	return sheet
 }
@@ -93,6 +96,18 @@ func (s *Sheet) Load() error {
 	for rowNum := 1; rowNum <= searchRows; rowNum++ {
 		for colNum := 1; colNum <= searchCols; colNum++ {
 			cellAddr, _ := excelize.CoordinatesToCellName(colNum, rowNum)
+			styleIndex, err := s.excel.file.GetCellStyle(s.Name, cellAddr)
+			if err != nil {
+				return err
+			}
+			// 仅在未命中缓存时获取并缓存样式，避免重复调用
+			if _, ok := s.styles[styleIndex]; !ok {
+				st, err := s.excel.file.GetStyle(styleIndex)
+				if err != nil {
+					return err
+				}
+				s.styles[styleIndex] = st
+			}
 			if _, exists := s.cells[cellAddr]; !exists {
 				// 检查该单元格是否被显式设置过（包括空值）
 				cellValue, err := s.excel.file.GetCellValue(s.Name, cellAddr)
@@ -109,6 +124,9 @@ func (s *Sheet) Load() error {
 						}
 					}
 				}
+			}
+			if cell, ok := s.cells[cellAddr]; ok {
+				cell.StyleIndex = styleIndex
 			}
 		}
 	}
@@ -443,4 +461,12 @@ func (s *Sheet) decodeImage(excelImage *ExcelImage) error {
 	excelImage.Height = bounds.Dy()
 
 	return nil
+}
+
+// GetStyle 获取样式
+func (s *Sheet) GetStyle(styleIndex int) (*excelize.Style, error) {
+	if styleIndex < 0 {
+		return nil, fmt.Errorf("非法样式索引: %d", styleIndex)
+	}
+	return s.styles[styleIndex], nil
 }

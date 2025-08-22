@@ -1,6 +1,7 @@
 package excelsnapshot
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -15,6 +16,7 @@ type Cell struct {
 	Address     string // 如 "A1"
 	Value       string // 解析后的显示值（已由 excelize 处理）
 	IsMerged    bool
+	StyleIndex  int
 	MergedRange []string
 }
 
@@ -45,10 +47,10 @@ func (c *Cell) Int() (int, error) {
 	return strconv.Atoi(strings.TrimSpace(c.Value))
 }
 
+// Style 获取单元格样式
 func (c *Cell) Style() (*excelize.Style, error) {
-	styleIndex, err := c.Sheet.excel.file.GetCellStyle(c.Sheet.Name, c.Address)
-	if err != nil {
-		return nil, err
+	if c == nil || c.Sheet == nil {
+		return nil, fmt.Errorf("cell 或 sheet 为空")
 	}
-	return c.Sheet.excel.file.GetStyle(styleIndex)
+	return c.Sheet.GetStyle(c.StyleIndex)
 }
