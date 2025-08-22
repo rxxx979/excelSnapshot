@@ -203,7 +203,7 @@ func (sr *SheetRenderer) getSheetWidthAndHeight(sheet *Sheet) (float64, float64)
 	if sheet == nil {
 		return 100, 100 // 返回默认尺寸
 	}
-	
+
 	totalWidth, totalHeight := 0.0, 0.0
 	for _, colWidth := range sheet.colWidthMap {
 		totalWidth += colWidth * 7
@@ -248,10 +248,15 @@ func (sr *SheetRenderer) getBorderColor(cell *Cell) color.Color {
 
 // GetFont 获取字体
 func (sr *SheetRenderer) GetFont(size float64, bold bool) (font.Face, error) {
+	mapKey := fmt.Sprintf("%f|%t", size, bold)
+	if f, ok := sr.fontMap[mapKey]; ok {
+		return f, nil
+	}
 	f, err := LoadDefaultFontWithSize(size, bold)
 	if err != nil {
 		return nil, err
 	}
+	sr.fontMap[mapKey] = f
 	return f, nil
 }
 
