@@ -1,2 +1,3 @@
 dist
-demo.xlsx
+*.xlsx
+.DS_Store

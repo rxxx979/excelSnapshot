@@ -85,32 +85,32 @@ func determineTargetSheet(args *CLIArgs, excel *excelsnapshot.Excel) (string, er
 func generateOutputPath(basePath, sheetName, excelPath string) string {
 	if basePath == "." {
 		// 如果是目录，生成默认文件名：excel文件名_sheet名称_时间.png
-		
+
 		// 提取Excel文件名（不含扩展名）
 		excelFileName := filepath.Base(excelPath)
 		excelFileName = strings.TrimSuffix(excelFileName, filepath.Ext(excelFileName))
-		
+
 		// 清理文件名中的特殊字符
 		excelFileNameSafe := strings.ReplaceAll(excelFileName, "/", "_")
 		excelFileNameSafe = strings.ReplaceAll(excelFileNameSafe, "\\", "_")
 		excelFileNameSafe = strings.ReplaceAll(excelFileNameSafe, " ", "_")
-		
+
 		sheetNameSafe := strings.ReplaceAll(sheetName, "/", "_")
 		sheetNameSafe = strings.ReplaceAll(sheetNameSafe, "\\", "_")
 		sheetNameSafe = strings.ReplaceAll(sheetNameSafe, " ", "_")
-		
+
 		// 生成时间戳
 		timestamp := time.Now().Format("20060102_150405")
-		
+
 		// 组合文件名
 		filename := fmt.Sprintf("%s_%s_%s.png", excelFileNameSafe, sheetNameSafe, timestamp)
 		return filepath.Join(basePath, filename)
 	}
-	
+
 	if !strings.HasSuffix(strings.ToLower(basePath), ".png") {
 		return basePath + ".png"
 	}
-	
+
 	return basePath
 }
 
