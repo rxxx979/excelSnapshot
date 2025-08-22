@@ -2,8 +2,6 @@ package excelsnapshot
 
 import (
 	"fmt"
-	"image/png"
-	"os"
 
 	"github.com/xuri/excelize/v2"
 	"go.uber.org/zap"
@@ -11,11 +9,11 @@ import (
 
 // Excel 结构体
 type Excel struct {
-	path          string
-	file          *excelize.File
-	sheets        map[string]*Sheet
-	logger        *zap.Logger
-	sheetRenderer *SheetRenderer
+	path       string
+	file       *excelize.File
+	sheets     map[string]*Sheet
+	indexSheet map[int]string
+	logger     *zap.Logger
 }
 
 // NewExcel 创建 Excel struct
@@ -24,29 +22,35 @@ func NewExcel(path string, logger *zap.Logger) (*Excel, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Excel{
-		path:          path,
-		file:          f,
-		sheets:        make(map[string]*Sheet),
-		logger:        logger,
-		sheetRenderer: NewSheetRenderer(logger),
-	}, nil
+	excel := &Excel{
+		path:       path,
+		file:       f,
+		sheets:     make(map[string]*Sheet),
+		indexSheet: make(map[int]string),
+		logger:     logger,
+	}
+	if err := excel.parseSheetListToMap(); err != nil {
+		return nil, err
+	}
+	return excel, nil
 }
 
 // GetSheetList 获取工作表列表
-func (e *Excel) GetSheetList() ([]string, error) {
+func (e *Excel) parseSheetListToMap() error {
 	if e.file == nil {
-		return nil, fmt.Errorf("Excel 文件未打开")
+		return fmt.Errorf("Excel 文件未打开")
 	}
-	return e.file.GetSheetList(), nil
+	names := e.file.GetSheetList()
+	e.sheets = make(map[string]*Sheet)
+	for idx, name := range names {
+		e.indexSheet[idx] = name
+	}
+	return nil
 }
 
 // LoadSheets 预加载所有工作表信息（名称、行列数、单元格值等）
-func (e *Excel) LoadSheets() error {
-	names, err := e.GetSheetList()
-	if err != nil {
-		return err
-	}
+func (e *Excel) LoadAllSheets() error {
+	names := e.file.GetSheetList()
 	for idx, name := range names {
 		if _, ok := e.sheets[name]; ok {
 			continue
@@ -91,30 +95,16 @@ func (e *Excel) Close() error {
 	return e.file.Close()
 }
 
-// Parse 解析 Excel（加载所有工作表到内存）
-func (e *Excel) Parse() error {
-	return e.LoadSheets()
+// ParseAll 解析 Excel（加载所有工作表到内存）
+func (e *Excel) ParseAll() error {
+	return e.LoadAllSheets()
 }
 
-func (e *Excel) RenderSheet(name string) error {
-	return e.RenderSheetWithScale(name, 2.0)
+func (e *Excel) Parse(sheetName string) error {
+	_, err := e.GetSheet(sheetName)
+	return err
 }
 
-func (e *Excel) RenderSheetWithScale(name string, scale float64) error {
-	sh, err := e.GetSheet(name)
-	if err != nil {
-		return err
-	}
-
-	img, err := e.sheetRenderer.RenderSheet(sh)
-	if err != nil {
-		return err
-	}
-	f, err := os.Create("out.png")
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	png.Encode(f, img)
-	return nil
+func (e *Excel) GetSheetNameByIndex(index int) string {
+	return e.indexSheet[index]
 }

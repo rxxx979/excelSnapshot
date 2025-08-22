@@ -14,9 +14,18 @@ import (
 //go:embed fonts/SourceHanSerifSC-Regular.otf
 var fontBytes []byte
 
+//go:embed fonts/SourceHanSerifSC-Bold.otf
+var fontBytesBold []byte
+
 // LoadDefaultFontWithSize 加载默认字体
-func LoadDefaultFontWithSize(size float64) (font.Face, error) {
-	f, err := opentype.Parse(fontBytes)
+func LoadDefaultFontWithSize(size float64, bold bool) (font.Face, error) {
+
+	toLoadFontBytes := fontBytes
+	if bold {
+		toLoadFontBytes = fontBytesBold
+	}
+
+	f, err := opentype.Parse(toLoadFontBytes)
 	if err != nil {
 		return nil, err
 	}
