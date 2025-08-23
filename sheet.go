@@ -7,6 +7,7 @@ import (
 	"image/gif"
 	"image/jpeg"
 	"image/png"
+	"math"
 	"strings"
 
 	"github.com/xuri/excelize/v2"
@@ -89,48 +90,91 @@ func (s *Sheet) Load() error {
 		}
 	}
 
-	// 使用更大的搜索范围来确保捕获所有可能的单元格
-	searchRows := max(maxRow, 10)
-	searchCols := max(maxCol, 10)
-
-	for rowNum := 1; rowNum <= searchRows; rowNum++ {
-		for colNum := 1; colNum <= searchCols; colNum++ {
-			cellAddr, _ := excelize.CoordinatesToCellName(colNum, rowNum)
-			styleIndex, err := s.excel.file.GetCellStyle(s.Name, cellAddr)
-			if err != nil {
-				return err
+	// 使用列视图补齐：GetCols 能保留列内的显式空单元格（如设置为 "" 的单元格）
+	if cols, err := s.excel.file.GetCols(s.Name); err == nil {
+		for colIndex, colData := range cols {
+			// 更新最大列数
+			if colIndex+1 > maxCol {
+				maxCol = colIndex + 1
 			}
-			// 仅在未命中缓存时获取并缓存样式，避免重复调用
-			if _, ok := s.styles[styleIndex]; !ok {
-				st, err := s.excel.file.GetStyle(styleIndex)
-				if err != nil {
-					return err
+			// 列长度可能超过按行视图统计的 maxRow
+			if len(colData) > maxRow {
+				maxRow = len(colData)
+			}
+			// 补齐该列在 [1..len(colData)] 范围内缺失的单元格
+			for r := 1; r <= len(colData); r++ {
+				addr, _ := excelize.CoordinatesToCellName(colIndex+1, r)
+				if _, ok := s.cells[addr]; !ok {
+					val := colData[r-1]
+					s.cells[addr] = &Cell{Sheet: s, Row: r, Col: colIndex + 1, Address: addr, Value: val}
 				}
-				s.styles[styleIndex] = st
-			}
-			if _, exists := s.cells[cellAddr]; !exists {
-				// 检查该单元格是否被显式设置过（包括空值）
-				cellValue, err := s.excel.file.GetCellValue(s.Name, cellAddr)
-				if err == nil {
-					// 通过获取单元格类型来判断是否存在
-					cellType, err := s.excel.file.GetCellType(s.Name, cellAddr)
-					if err == nil && cellType != excelize.CellTypeUnset {
-						s.cells[cellAddr] = &Cell{
-							Sheet:   s,
-							Row:     rowNum,
-							Col:     colNum,
-							Address: cellAddr,
-							Value:   cellValue,
-						}
-					}
-				}
-			}
-			if cell, ok := s.cells[cellAddr]; ok {
-				cell.StyleIndex = styleIndex
 			}
 		}
 	}
-	s.excel.logger.Info("加载工作表", zap.String("sheet", s.Name), zap.Int("rows", maxRow), zap.Int("cols", maxCol))
+
+	// 根据工作表维度补齐维度内缺失的空单元格（例如显式设置为空字符串的单元格）
+	if dim, err := s.excel.file.GetSheetDimension(s.Name); err == nil && dim != "" {
+		parts := strings.Split(dim, ":")
+		if len(parts) == 2 {
+			// 维度形如 A1:D10
+			sc, sr, _ := excelize.CellNameToCoordinates(parts[0])
+			ec, er, _ := excelize.CellNameToCoordinates(parts[1])
+			if er > maxRow {
+				maxRow = er
+			}
+			if ec > maxCol {
+				maxCol = ec
+			}
+			for r := sr; r <= er; r++ {
+				for c := sc; c <= ec; c++ {
+					addr, _ := excelize.CoordinatesToCellName(c, r)
+					if _, ok := s.cells[addr]; !ok {
+						s.cells[addr] = &Cell{Sheet: s, Row: r, Col: c, Address: addr, Value: ""}
+					}
+				}
+			}
+		} else if len(parts) == 1 {
+			// 单点维度，如 A1
+			ec, er, _ := excelize.CellNameToCoordinates(parts[0])
+			if er > maxRow {
+				maxRow = er
+			}
+			if ec > maxCol {
+				maxCol = ec
+			}
+			for r := 1; r <= er; r++ {
+				for c := 1; c <= ec; c++ {
+					addr, _ := excelize.CoordinatesToCellName(c, r)
+					if _, ok := s.cells[addr]; !ok {
+						s.cells[addr] = &Cell{Sheet: s, Row: r, Col: c, Address: addr, Value: ""}
+					}
+				}
+			}
+		}
+	}
+
+	// 仅对已存在的单元格绑定样式并缓存（避免对空区域重复扫描）
+	styleBindCount := 0
+	styleCacheMiss := 0
+	for addr, cell := range s.cells {
+		styleIndex, err := s.excel.file.GetCellStyle(s.Name, addr)
+		if err != nil {
+			return err
+		}
+		if cell.StyleIndex != styleIndex {
+			cell.StyleIndex = styleIndex
+		}
+		if _, ok := s.styles[styleIndex]; !ok {
+			st, err := s.excel.file.GetStyle(styleIndex)
+			if err != nil {
+				return err
+			}
+			s.styles[styleIndex] = st
+			styleCacheMiss++
+		}
+		styleBindCount++
+	}
+	s.excel.logger.Info("加载工作表", zap.String("sheet", s.Name), zap.Int("rows", maxRow), zap.Int("cols", maxCol), zap.Int("cells", len(s.cells)), zap.Int("style_bind", styleBindCount), zap.Int("style_miss", styleCacheMiss))
 
 	// 优化：批量处理行高（利用Excel行内高度统一特性）
 	for rowNum := 1; rowNum <= maxRow; rowNum++ {
@@ -147,7 +191,6 @@ func (s *Sheet) Load() error {
 		}
 
 		s.rowHeightMap[rowNum] = height
-		s.excel.logger.Debug("行：", zap.Int("row", rowNum), zap.Float64("height", height))
 	}
 
 	// 优化：批量处理列宽（利用Excel列内宽度统一特性）
@@ -155,7 +198,6 @@ func (s *Sheet) Load() error {
 		colLetter, _ := excelize.ColumnNumberToName(col)
 		width, _ := s.excel.file.GetColWidth(s.Name, colLetter)
 		s.colWidthMap[colLetter] = width
-		s.excel.logger.Debug("列：", zap.String("col", colLetter), zap.Float64("width", width))
 	}
 
 	// 智能列宽调整：确保所有数据完整可见
@@ -169,7 +211,7 @@ func (s *Sheet) Load() error {
 	for _, mergedCell := range mergedCells {
 		startCol, startRow, _ := excelize.CellNameToCoordinates(mergedCell.GetStartAxis())
 		endCol, endRow, _ := excelize.CellNameToCoordinates(mergedCell.GetEndAxis())
-		s.excel.logger.Debug("合并单元格：", zap.String("start", mergedCell.GetStartAxis()), zap.String("end", mergedCell.GetEndAxis()))
+
 		// 构造整个合并区域的地址列表
 		var mergedRange []string
 		for r := startRow; r <= endRow; r++ {
@@ -197,6 +239,30 @@ func (s *Sheet) Load() error {
 			cell.IsMerged = true
 			cell.MergedRange = mergedRange
 		}
+
+		// 确保主单元格（左上角）样式已绑定并加入缓存
+		mainAddr := mergedCell.GetStartAxis()
+		if mainCell, ok := s.cells[mainAddr]; ok {
+			// 若此前未绑定样式，则立即绑定并缓存
+			if mainCell.StyleIndex == 0 {
+				idx, err := s.excel.file.GetCellStyle(s.Name, mainAddr)
+				if err != nil {
+					return err
+				}
+				if mainCell.StyleIndex != idx {
+					mainCell.StyleIndex = idx
+				}
+				if _, ok := s.styles[idx]; !ok {
+					st, err := s.excel.file.GetStyle(idx)
+					if err != nil {
+						return err
+					}
+					s.styles[idx] = st
+					styleCacheMiss++
+				}
+				styleBindCount++
+			}
+		}
 	}
 
 	// 加载工作表中的图片
@@ -223,18 +289,20 @@ func (s *Sheet) GetRowHeight(row int) float64 {
 
 // optimizeColumnWidths 智能调整列宽以确保数据完整可见
 func (s *Sheet) optimizeColumnWidths() {
+	// Excel 默认列宽（与 excelize 返回值对齐），使用容差判断
+	const defaultColWidth = 9.140625
+	const eps = 1e-6
+
 	for colLetter := range s.colWidthMap {
-		maxContentWidth := s.calculateMaxContentWidth(colLetter)
 		currentWidth := s.colWidthMap[colLetter]
 
-		// 如果内容宽度超过当前列宽，则调整
-		if maxContentWidth > currentWidth {
-			// 增加20%的缓冲区
-			s.colWidthMap[colLetter] = maxContentWidth * 1.4
-			s.excel.logger.Debug("调整列宽",
-				zap.String("col", colLetter),
-				zap.Float64("原宽度", currentWidth),
-				zap.Float64("新宽度", maxContentWidth*1.4))
+		// 仅当列宽为默认值时，按内容进行估算调整；否则尊重文件中的列宽设置
+		if math.Abs(currentWidth-defaultColWidth) <= eps {
+			maxContentWidth := s.calculateMaxContentWidth(colLetter)
+			if maxContentWidth > currentWidth {
+				// 增加20%的缓冲区
+				s.colWidthMap[colLetter] = maxContentWidth * 1.4
+			}
 		}
 	}
 }
@@ -301,9 +369,16 @@ func (s *Sheet) estimateRowHeight(rowNum int, rowData []string) float64 {
 
 		// 获取字体大小
 		fontSize := 11.0 // 默认字体大小
+		wrapText := true // 默认为可换行（多数场景渲染更友好）
 		if cell != nil {
-			if style, err := cell.Style(); err == nil && style.Font.Size > 0 {
-				fontSize = style.Font.Size
+			if style, err := cell.Style(); err == nil && style != nil {
+				if style.Font != nil && style.Font.Size > 0 {
+					fontSize = style.Font.Size
+				}
+				// 若样式提供换行信息，则以样式为准（注意 Alignment 可能为 nil）
+				if style.Alignment != nil {
+					wrapText = style.Alignment.WrapText
+				}
 			}
 		}
 
@@ -311,51 +386,65 @@ func (s *Sheet) estimateRowHeight(rowNum int, rowData []string) float64 {
 		// 经验公式：行高 ≈ 字体大小 * 1.2 到 1.4 之间
 		fontBasedHeight := fontSize * 1.33
 
-		// 检查是否有换行符
-		lineCount := 1
+		// 显式换行符统计
+		explicitLines := 1
 		for _, char := range cellValue {
 			if char == '\n' || char == '\r' {
-				lineCount++
+				explicitLines++
 			}
 		}
 
-		// 根据换行数量调整高度
-		if lineCount > 1 {
-			estimatedHeight := fontBasedHeight * float64(lineCount)
-			if estimatedHeight > maxHeight {
-				maxHeight = estimatedHeight
+		// 列宽（Excel 列宽单位）。若未能获取，使用默认列宽
+		colName, _ := excelize.ColumnNumberToName(colIndex + 1)
+		colWidth := s.GetColWidth(colName)
+		if colWidth <= 0 {
+			colWidth = 9.140625 // Excel 默认列宽
+		}
+
+		// 基于内容宽度估算需要的行数（仅当允许换行或存在显式换行时生效）
+		lines := 1
+		if wrapText || explicitLines > 1 {
+			if explicitLines > 1 {
+				// 按显式换行切分，每段分别估算并累加
+				segs := strings.FieldsFunc(cellValue, func(r rune) bool { return r == '\n' || r == '\r' })
+				total := 0
+				for _, seg := range segs {
+					cw := s.estimateTextWidth(seg)
+					if colWidth > 0 {
+						need := int(cw/colWidth + 0.9999)
+						if need < 1 {
+							need = 1
+						}
+						total += need
+					} else {
+						total += 1
+					}
+				}
+				if total < 1 {
+					total = 1
+				}
+				lines = total
+			} else {
+				// 无显式换行，整段估算
+				contentWidthUnits := s.estimateTextWidth(cellValue)
+				if colWidth > 0 {
+					needed := int(contentWidthUnits/colWidth + 0.9999) // ceil
+					if needed < 1 {
+						needed = 1
+					}
+					lines = needed
+				} else {
+					lines = 1
+				}
 			}
 		} else {
-			// 根据内容长度估算（如果内容很长，可能需要自动换行）
-			colName, _ := excelize.ColumnNumberToName(colIndex + 1)
-			colWidth := s.GetColWidth(colName)
-			if colWidth == 0 {
-				colWidth = 64 // 默认列宽，单位字符
-			}
+			// 不允许自动换行且没有显式换行，认为单行
+			lines = 1
+		}
 
-			// 基于字体大小估算每行能容纳的字符数
-			// 字体越大，每行容纳的字符越少
-			avgCharWidth := fontSize * 0.6                   // 估算平均字符宽度
-			charsPerLine := int(colWidth * 7 / avgCharWidth) // colWidth*7 转换为像素
-			if charsPerLine < 1 {
-				charsPerLine = 1
-			}
-
-			// 计算内容可能占用的行数
-			contentLength := len([]rune(cellValue)) // 使用 rune 处理中文字符
-			estimatedLines := (contentLength + charsPerLine - 1) / charsPerLine
-
-			if estimatedLines > 1 {
-				estimatedHeight := fontBasedHeight * float64(estimatedLines)
-				if estimatedHeight > maxHeight {
-					maxHeight = estimatedHeight
-				}
-			} else {
-				// 单行内容，使用基于字体的高度
-				if fontBasedHeight > maxHeight {
-					maxHeight = fontBasedHeight
-				}
-			}
+		estimatedHeight := fontBasedHeight * float64(lines)
+		if estimatedHeight > maxHeight {
+			maxHeight = estimatedHeight
 		}
 	}
 
@@ -468,5 +557,8 @@ func (s *Sheet) GetStyle(styleIndex int) (*excelize.Style, error) {
 	if styleIndex < 0 {
 		return nil, fmt.Errorf("非法样式索引: %d", styleIndex)
 	}
-	return s.styles[styleIndex], nil
+	if st, ok := s.styles[styleIndex]; ok && st != nil {
+		return st, nil
+	}
+	return nil, fmt.Errorf("样式未缓存: %d", styleIndex)
 }

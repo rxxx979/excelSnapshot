@@ -48,21 +48,10 @@ func (sr *SheetRenderer) RenderSheet(sheet *Sheet) (image.Image, error) {
 	// 计算所有单元格矩形信息
 	cellRects := sr.calculateCellRects(sheet)
 
-	// 先绘制所有单元格边框（包括空单元格）
-	for addr, rect := range cellRects {
-		cell := sheet.cells[addr]
-		// 检查是否是合并单元格的非主单元格
-		if cell != nil && cell.IsMerged && cell.MergedRange[0] != addr {
-			continue
-		}
-		// 绘制边框，使用样式颜色或默认颜色
-		borderColor := sr.getBorderColor(cell)
-		canvas.SetColor(borderColor)
-		canvas.DrawRectangle(rect.x, rect.y, rect.w, rect.h)
-		canvas.Stroke()
-	}
+	// 先绘制整张默认网格（浅灰色）
+	sr.drawBaseGrid(canvas, sheet)
 
-	// 然后绘制有内容的单元格
+	// 再绘制单元格：背景+文本，并仅对非默认边框颜色进行覆盖
 	for addr, rect := range cellRects {
 		cell := sheet.cells[addr]
 		if cell == nil {
@@ -72,7 +61,10 @@ func (sr *SheetRenderer) RenderSheet(sheet *Sheet) (image.Image, error) {
 		if cell.IsMerged && cell.MergedRange[0] != addr {
 			continue
 		}
+		// 背景与文本
 		sr.drawCell(canvas, rect, cell)
+		// 边框覆盖（非默认颜色）
+		sr.drawCellBordersOverride(canvas, rect, cell)
 	}
 
 	// 最后绘制嵌入的图片（在单元格内容之上）
@@ -143,14 +135,15 @@ func (sr *SheetRenderer) calcMergedRectOffsets(cell *Cell, colOffsets, rowOffset
 	return width, height
 }
 
-// drawCell 绘制单元格，包括背景色、边框和文本
+// drawCell 绘制单元格，包括背景色和文本
 func (sr *SheetRenderer) drawCell(canvas *gg.Context, rect struct{ x, y, w, h float64 }, cell *Cell) {
-	// 绘制背景色
+	// 绘制背景色（样式容错）
 	style, err := cell.Style()
-	if err != nil {
-		sr.logger.Error("获取单元格样式失败", zap.Error(err))
-	}
-	if len(style.Fill.Color) > 0 {
+	if err != nil || style == nil {
+		if err != nil {
+			sr.logger.Debug("获取单元格样式失败，采用默认样式", zap.Error(err))
+		}
+	} else if len(style.Fill.Color) > 0 {
 		if bgColor, err := HexToRGBA(style.Fill.Color[0]); err == nil {
 			canvas.SetColor(bgColor)
 			canvas.DrawRectangle(rect.x, rect.y, rect.w, rect.h)
@@ -158,16 +151,17 @@ func (sr *SheetRenderer) drawCell(canvas *gg.Context, rect struct{ x, y, w, h fl
 		}
 	}
 
-	// 绘制边框，使用样式颜色
-	borderColor := sr.getBorderColor(cell)
-	canvas.SetColor(borderColor)
-	canvas.DrawRectangle(rect.x, rect.y, rect.w, rect.h)
-	canvas.Stroke()
-
 	// 绘制文本（避免缩放后的位图再缩放导致的模糊）
 	if cell.Value != "" {
-		fontSize := style.Font.Size
-		bold := style.Font.Bold
+		// 字体参数（样式容错）
+		fontSize := 11.0
+		bold := false
+		if style != nil && style.Font != nil {
+			if style.Font.Size > 0 {
+				fontSize = style.Font.Size
+			}
+			bold = style.Font.Bold
+		}
 
 		// 使用未缩放坐标系绘制文字：放大字体尺寸，使用设备像素坐标
 		fontFace, err := sr.GetFont(fontSize*scale, bold)
@@ -183,7 +177,7 @@ func (sr *SheetRenderer) drawCell(canvas *gg.Context, rect struct{ x, y, w, h fl
 		dy = math.Round(dy)
 
 		var fontColor color.Color = color.Black
-		if style.Font.Color != "" {
+		if style != nil && style.Font != nil && style.Font.Color != "" {
 			if fc, err := HexToRGBA(style.Font.Color); err == nil {
 				fontColor = fc
 			}
@@ -216,34 +210,115 @@ func (sr *SheetRenderer) getSheetWidthAndHeight(sheet *Sheet) (float64, float64)
 
 // getBorderColor 获取单元格边框颜色
 func (sr *SheetRenderer) getBorderColor(cell *Cell) color.Color {
-	// 默认边框颜色
-	defaultBorderColor := color.RGBA{R: 200, G: 200, B: 200, A: 255} // 浅灰色
-
+	def := defaultBorderColor()
 	if cell == nil {
-		return defaultBorderColor
+		return def
 	}
-
-	// 获取单元格样式
 	style, err := cell.Style()
-	if err != nil {
-		return defaultBorderColor
+	if err != nil || style == nil {
+		return def
 	}
-
-	// 只使用样式中明确定义的边框颜色
 	if len(style.Border) > 0 {
-		// 检查各边的边框颜色（上、下、左、右）
-		borders := []string{style.Border[0].Color, style.Border[1].Color, style.Border[2].Color, style.Border[3].Color}
-		for _, borderColor := range borders {
-			if borderColor != "" {
-				if c, err := HexToRGBA(borderColor); err == nil {
+		for _, b := range style.Border {
+			if b.Color != "" {
+				if c, err := HexToRGBA(b.Color); err == nil {
 					return c
 				}
 			}
 		}
 	}
+	return def
+}
 
-	// 如果样式中没有明确的边框颜色，都使用默认颜色
-	return defaultBorderColor
+// defaultBorderColor 返回默认边框颜色（浅灰色）
+func defaultBorderColor() color.Color {
+	return color.RGBA{R: 200, G: 200, B: 200, A: 255}
+}
+
+// equalColor 比较两个颜色是否等价（按 RGBA 值）
+func equalColor(a, b color.Color) bool {
+	ar, ag, ab, aa := a.RGBA()
+	br, bg, bb, ba := b.RGBA()
+	return ar == br && ag == bg && ab == bb && aa == ba
+}
+
+// drawBaseGrid 使用行/列端点绘制整张默认网格
+func (sr *SheetRenderer) drawBaseGrid(canvas *gg.Context, sheet *Sheet) {
+	def := defaultBorderColor()
+	canvas.SetColor(def)
+
+	// 列偏移与总宽
+	colOffsets := make([]float64, sheet.Cols+1)
+	for c := 1; c <= sheet.Cols; c++ {
+		colName, _ := excelize.ColumnNumberToName(c)
+		colWidth := sheet.GetColWidth(colName) * 7
+		colOffsets[c] = colOffsets[c-1] + colWidth
+	}
+	totalWidth := colOffsets[sheet.Cols]
+
+	// 行偏移与总高
+	rowOffsets := make([]float64, sheet.Rows+1)
+	for r := 1; r <= sheet.Rows; r++ {
+		rowHeight := sheet.GetRowHeight(r) * 1.33
+		rowOffsets[r] = rowOffsets[r-1] + rowHeight
+	}
+	totalHeight := rowOffsets[sheet.Rows]
+
+	// 竖线
+	for i := 0; i <= sheet.Cols; i++ {
+		x := colOffsets[i]
+		canvas.DrawLine(x, 0, x, totalHeight)
+		canvas.Stroke()
+	}
+	// 横线
+	for i := 0; i <= sheet.Rows; i++ {
+		y := rowOffsets[i]
+		canvas.DrawLine(0, y, totalWidth, y)
+		canvas.Stroke()
+	}
+}
+
+// drawCellBordersOverride 仅覆盖非默认颜色的边框（按边）
+func (sr *SheetRenderer) drawCellBordersOverride(canvas *gg.Context, rect struct{ x, y, w, h float64 }, cell *Cell) {
+	if cell == nil {
+		return
+	}
+	style, err := cell.Style()
+	if err != nil || style == nil {
+		return
+	}
+	def := defaultBorderColor()
+	// 遍历样式边框定义，按边绘制
+	for _, b := range style.Border {
+		if b.Color == "" {
+			continue
+		}
+		col, err := HexToRGBA(b.Color)
+		if err != nil {
+			continue
+		}
+		if equalColor(col, def) {
+			// 与默认色一致则无需覆盖
+			continue
+		}
+		canvas.SetColor(col)
+		switch b.Type {
+		case "left":
+			canvas.DrawLine(rect.x, rect.y, rect.x, rect.y+rect.h)
+			canvas.Stroke()
+		case "right":
+			canvas.DrawLine(rect.x+rect.w, rect.y, rect.x+rect.w, rect.y+rect.h)
+			canvas.Stroke()
+		case "top":
+			canvas.DrawLine(rect.x, rect.y, rect.x+rect.w, rect.y)
+			canvas.Stroke()
+		case "bottom":
+			canvas.DrawLine(rect.x, rect.y+rect.h, rect.x+rect.w, rect.y+rect.h)
+			canvas.Stroke()
+		default:
+			// 其他类型（如 diagonal*），此处忽略
+		}
+	}
 }
 
 // GetFont 获取字体
