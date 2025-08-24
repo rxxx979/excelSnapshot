@@ -81,37 +81,42 @@ func determineTargetSheet(args *CLIArgs, excel *excelsnapshot.Excel) (string, er
 	return excel.GetSheetNameByIndex(0), nil
 }
 
-// 生成输出文件路径
-func generateOutputPath(basePath, sheetName, excelPath string) string {
-	if basePath == "." {
-		// 如果是目录，生成默认文件名：excel文件名_sheet名称_时间.png
-
-		// 提取Excel文件名（不含扩展名）
-		excelFileName := filepath.Base(excelPath)
-		excelFileName = strings.TrimSuffix(excelFileName, filepath.Ext(excelFileName))
-
-		// 清理文件名中的特殊字符
-		excelFileNameSafe := strings.ReplaceAll(excelFileName, "/", "_")
-		excelFileNameSafe = strings.ReplaceAll(excelFileNameSafe, "\\", "_")
-		excelFileNameSafe = strings.ReplaceAll(excelFileNameSafe, " ", "_")
-
-		sheetNameSafe := strings.ReplaceAll(sheetName, "/", "_")
-		sheetNameSafe = strings.ReplaceAll(sheetNameSafe, "\\", "_")
-		sheetNameSafe = strings.ReplaceAll(sheetNameSafe, " ", "_")
-
-		// 生成时间戳
-		timestamp := time.Now().Format("20060102_150405")
-
-		// 组合文件名
-		filename := fmt.Sprintf("%s_%s_%s.png", excelFileNameSafe, sheetNameSafe, timestamp)
-		return filepath.Join(basePath, filename)
+// 生成输出文件路径：
+// - 若 basePath 以 .png 结尾，按文件路径使用；
+// - 否则视为目录：目录必须已存在，否则返回错误；存在则在目录内自动命名（excel名_sheet_时间戳.png）。
+func generateOutputPath(basePath, sheetName, excelPath string) (string, error) {
+	if strings.HasSuffix(strings.ToLower(basePath), ".png") {
+		return basePath, nil
 	}
 
-	if !strings.HasSuffix(strings.ToLower(basePath), ".png") {
-		return basePath + ".png"
+	// 视为目录：必须存在
+	if basePath == "" {
+		basePath = "."
+	}
+	info, err := os.Stat(basePath)
+	if err != nil || !info.IsDir() {
+		return "", fmt.Errorf("输出目录不存在或不可用: %s", basePath)
 	}
 
-	return basePath
+	// 提取Excel文件名（不含扩展名）
+	excelFileName := filepath.Base(excelPath)
+	excelFileName = strings.TrimSuffix(excelFileName, filepath.Ext(excelFileName))
+
+	// 清理文件名中的特殊字符
+	excelFileNameSafe := strings.ReplaceAll(excelFileName, "/", "_")
+	excelFileNameSafe = strings.ReplaceAll(excelFileNameSafe, "\\", "_")
+	excelFileNameSafe = strings.ReplaceAll(excelFileNameSafe, " ", "_")
+
+	sheetNameSafe := strings.ReplaceAll(sheetName, "/", "_")
+	sheetNameSafe = strings.ReplaceAll(sheetNameSafe, "\\", "_")
+	sheetNameSafe = strings.ReplaceAll(sheetNameSafe, " ", "_")
+
+	// 生成时间戳
+	timestamp := time.Now().Format("20060102_150405")
+
+	// 组合文件名
+	filename := fmt.Sprintf("%s_%s_%s.png", excelFileNameSafe, sheetNameSafe, timestamp)
+	return filepath.Join(basePath, filename), nil
 }
 
 // 保存渲染结果
@@ -148,7 +153,10 @@ func renderSingleSheet(args *CLIArgs, excel *excelsnapshot.Excel, renderer *exce
 	}
 
 	// 生成输出路径并保存
-	outputPath := generateOutputPath(args.outPath, targetSheet, args.inPath)
+	outputPath, err := generateOutputPath(args.outPath, targetSheet, args.inPath)
+	if err != nil {
+		return err
+	}
 	if err := saveImage(img, outputPath); err != nil {
 		return err
 	}
@@ -169,7 +177,10 @@ func renderAllSheets(args *CLIArgs, excel *excelsnapshot.Excel, renderer *excels
 			return fmt.Errorf("渲染工作表 %s 失败: %w", sheet.Name, err)
 		}
 
-		outputPath := generateOutputPath(args.outPath, sheet.Name, args.inPath)
+		outputPath, err := generateOutputPath(args.outPath, sheet.Name, args.inPath)
+		if err != nil {
+			return fmt.Errorf("输出目录校验失败: %w", err)
+		}
 		if err := saveImage(img, outputPath); err != nil {
 			return fmt.Errorf("保存工作表 %s 失败: %w", sheet.Name, err)
 		}
@@ -184,7 +195,8 @@ func renderAllSheets(args *CLIArgs, excel *excelsnapshot.Excel, renderer *excels
 func main() {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("程序异常退出: %v\n", r)
+			// 捕获未知 panic，打印并以非零退出
+			fmt.Fprintf(os.Stderr, "程序异常退出: %v\n", r)
 			debug.PrintStack()
 			os.Exit(1)
 		}
@@ -196,7 +208,8 @@ func main() {
 	// 初始化日志
 	logger, loggerSync, err := setupLogger(args.verbose)
 	if err != nil {
-		panic(err)
+		fmt.Fprintf(os.Stderr, "初始化日志失败: %v\n", err)
+		os.Exit(1)
 	}
 	defer loggerSync()
 
@@ -207,32 +220,38 @@ func main() {
 	logger.Info("加载 Excel 文件", zap.String("path", args.inPath))
 	excel, err := excelsnapshot.NewExcel(args.inPath, logger)
 	if err != nil {
-		panic(fmt.Errorf("加载Excel文件失败: %w", err))
+		fmt.Fprintf(os.Stderr, "加载Excel文件失败: %v\n", err)
+		os.Exit(1)
 	}
 
 	// 根据参数决定渲染模式
 	if args.all {
 		// 渲染所有工作表
 		if err := excel.ParseAll(); err != nil {
-			panic(fmt.Errorf("解析Excel失败: %w", err))
+			fmt.Fprintf(os.Stderr, "解析Excel失败: %v\n", err)
+			os.Exit(1)
 		}
 
 		if err := renderAllSheets(args, excel, renderer, logger); err != nil {
-			panic(err)
+			fmt.Fprintf(os.Stderr, "渲染所有工作表失败: %v\n", err)
+			os.Exit(1)
 		}
 	} else {
 		// 渲染单个工作表
 		targetSheet, err := determineTargetSheet(args, excel)
 		if err != nil {
-			panic(err)
+			fmt.Fprintf(os.Stderr, "参数错误: %v\n", err)
+			os.Exit(1)
 		}
 
 		if err := excel.Parse(targetSheet); err != nil {
-			panic(fmt.Errorf("解析工作表失败: %w", err))
+			fmt.Fprintf(os.Stderr, "解析工作表失败: %v\n", err)
+			os.Exit(1)
 		}
 
 		if err := renderSingleSheet(args, excel, renderer, logger); err != nil {
-			panic(err)
+			fmt.Fprintf(os.Stderr, "渲染失败: %v\n", err)
+			os.Exit(1)
 		}
 	}
 }

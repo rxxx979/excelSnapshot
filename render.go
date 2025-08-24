@@ -208,28 +208,6 @@ func (sr *SheetRenderer) getSheetWidthAndHeight(sheet *Sheet) (float64, float64)
 	return totalWidth, totalHeight
 }
 
-// getBorderColor 获取单元格边框颜色
-func (sr *SheetRenderer) getBorderColor(cell *Cell) color.Color {
-	def := defaultBorderColor()
-	if cell == nil {
-		return def
-	}
-	style, err := cell.Style()
-	if err != nil || style == nil {
-		return def
-	}
-	if len(style.Border) > 0 {
-		for _, b := range style.Border {
-			if b.Color != "" {
-				if c, err := HexToRGBA(b.Color); err == nil {
-					return c
-				}
-			}
-		}
-	}
-	return def
-}
-
 // defaultBorderColor 返回默认边框颜色（浅灰色）
 func defaultBorderColor() color.Color {
 	return color.RGBA{R: 200, G: 200, B: 200, A: 255}
